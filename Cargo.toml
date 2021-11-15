@@ -1,5 +1,5 @@
 [package]
-name = "naive_pose_json_completer"
+name = "naive_body25_pose_fill"
 version = "0.1.0"
 edition = "2018"
 
