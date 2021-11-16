@@ -18,7 +18,7 @@ use ndarray_linalg::*;
 #[derive(Serialize, Deserialize)]
 struct PersonPose {
     id: u32,
-    keypoints3d: [[f32; 4]; 25],
+    keypoints3d: [[f64; 4]; 25],
 }
 
 impl fmt::Debug for PersonPose {
@@ -45,7 +45,7 @@ fn save_poses_to_json(p: &Vec<PersonPose>) -> String {
 fn personpose_to_mat(
     p: &PersonPose,
     mask: &Vec<bool>,
-) -> ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>> {
+) -> ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> {
     let msize: usize = mask
         .iter()
         .fold(0, |msize, x| msize + (if *x { 1 } else { 0 }));
@@ -64,9 +64,9 @@ fn personpose_to_mat(
 
 fn mat_to_personpose(
     p_id: u32,
-    mat: &ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>>,
+    mat: &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>,
 ) -> PersonPose {
-    let mut arr: [[f32; 4]; 25] = [[0.0; 4]; 25];
+    let mut arr: [[f64; 4]; 25] = [[0.0; 4]; 25];
     for i in 0..25 {
         for j in 0..4 {
             arr[i][j] = mat[(i, j)];
@@ -83,26 +83,32 @@ fn complete_with_transformed_ref(
     p: &PersonPose,
     ref_p: &PersonPose,
     transformation: (
-        &ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>>,
-        &ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 1]>>,
+        &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>,
+        &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 1]>>,
     ),
-) -> ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>> {
+) -> ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> {
     let (rotation, translation) = transformation;
+    let rotation = rotation_matrix_z_component(rotation);
     let confidence = 0.7;
     let mut completed_keypoints = Array::zeros((25, 4));
     for i in 0..25 {
         //if p.keypoints3d[i][3] == 0.0{
-        if p.keypoints3d[i][3] > -1000.0 {
-            let mut transformed_point = Array::zeros((3, 1));
+        if p.keypoints3d[i][3] < 0.7 {
+            let mut transformed_point = Array::zeros((1, 3));
             for j in 0..3 {
-                transformed_point[(j, 0)] = ref_p.keypoints3d[i][j];
+                transformed_point[(0, j)] = ref_p.keypoints3d[i][j];
             }
+            //println!(": {:?}", check);
+            //println!("det: {:?}", rotation.det());
             // * rotation) + translation;
             //transformed_point = transformed_point * rotation + translation;
-            transformed_point = rotation * transformed_point;
+            //transformed_point = rotation * transformed_point;
+            let res = (transformed_point.dot(&rotation)) + translation;
+            //println!("to: {:?}", res);
+
             //let res = ((-trans + (rot*p)) - b.slice(s![0, ..]));
             for j in 0..3 {
-                completed_keypoints[(i, j)] = transformed_point[(j, 0)];
+                completed_keypoints[(i, j)] = res[(0, j)];
                 completed_keypoints[(i, 3)] = confidence;
             }
         } else {
@@ -116,11 +122,11 @@ fn complete_with_transformed_ref(
 
 //https://tipsfordev.com/procrustes-analysis-with-numpy
 fn procrustes(
-    x: &Array2<f32>,
-    y: &Array2<f32>,
+    x: &Array2<f64>,
+    y: &Array2<f64>,
 ) -> (
-    ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>>,
-    ndarray::ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 1]>>,
+    ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>,
+    ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 1]>>,
 ) {
     assert_eq!(x.shape(), y.shape());
 
@@ -185,15 +191,20 @@ fn main() {
         let a_mat = personpose_to_mat(&ps, &mask);
 
         //find rotation, translation
-        let (rotation, translation) = procrustes(&ref_mat, &a_mat);
+        let (rotation, translation) = procrustes(&a_mat, &ref_mat);
+
+        //println!("orig: {:?}", &a_mat);
+        //println!("ref: {:?}", &ref_mat);
+        //println!("rot: {:?}", &rotation);
+        //println!("trans: {:?}", &translation);
         //apply rot/transl to ref and complete a
         let completed = complete_with_transformed_ref(&ps, &ref_pose[0], (&rotation, &translation));
         //println!("{:?}", completed);
 
         let p = mat_to_personpose(count, &completed);
         v.push(p);
-        //println!("{}",count);
         count += 1;
+        //println!("{}",count);
     }
     //let v: Vec<PersonPose> = vec![p];
     let s = save_poses_to_json(&v);
@@ -201,19 +212,100 @@ fn main() {
     fs::write(out_filename, &s).expect("Unable to write file");
 }
 
+//https://learnopencv.com/rotation-matrix-to-euler-angles/
+// Checks if a matrix is a valid rotation matrix.
+fn is_rotation_matrix(r: &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>) -> bool {
+    println!("{:?}", r);
+    let iMat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
+    let check = iMat.dot(r).dot(&r.t());
+    let iMat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
+    (check - iMat).norm() < 0.000001
+}
+
+/*
+Vec3f rotationMatrixToEulerAngles(Mat &R)
+{
+
+    assert(isRotationMatrix(R));
+
+    float sy = sqrt(R.at<double>(0,0) * R.at<double>(0,0) +  R.at<double>(1,0) * R.at<double>(1,0) );
+
+    bool singular = sy < 1e-6; // If
+
+    float x, y, z;
+    if (!singular)
+    {
+        x = atan2(R.at<double>(2,1) , R.at<double>(2,2));
+        y = atan2(-R.at<double>(2,0), sy);
+        z = atan2(R.at<double>(1,0), R.at<double>(0,0));
+    }
+    else
+    {
+        x = atan2(-R.at<double>(1,2), R.at<double>(1,1));
+        y = atan2(-R.at<double>(2,0), sy);
+        z = 0;
+    }
+    return Vec3f(x, y, z);
+
+    }
+*/
+
+// Calculates rotation matrix to euler angles
+// The result is the same as MATLAB except the order
+// of the euler angles ( x and z are swapped ).
+fn rotation_matrix_z_component(
+    r: &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>,
+) -> ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> {
+    //float sy = sqrt(R.at<double>(0,0) * R.at<double>(0,0)
+    // +  R.at<double>(1,0) * R.at<double>(1,0) );
+
+    let sy = (r[(0, 0)].powi(2) + r[(1, 0)].powi(2)).sqrt();
+
+    let singular = sy < 1.0e-6_f64;
+    let mut x: f64 = 0.0;
+    let mut y: f64 = 0.0;
+    let mut z: f64 = 0.0;
+    if (!singular) {
+        x = r[(2, 1)].atan2(r[(2, 2)]);
+        y = (-r[(2, 0)]).atan2(sy);
+        z = r[(1, 0)].atan2(r[(0, 0)]);
+    } else {
+        x = (-r[(1, 2)]).atan2(r[(1, 1)]);
+        y = (-r[(2, 0)]).atan2(sy);
+        z = 0.0;
+    }
+
+    // Calculate rotation about z axis
+    //Mat R_z = (Mat_<double>(3,3) <<
+    //           cos(theta[2]),    -sin(theta[2]),      0,
+    //           sin(theta[2]),    cos(theta[2]),       0,
+    //           0,               0,                  1);
+    array![
+        [z.cos(), -z.sin(), 0.0],
+        [z.sin(), z.cos(), 0.0],
+        [0.0, 0.0, 1.0]
+    ]
+}
 #[test]
 fn procrustes_works() {
-    //let a = array![[1.0, 3.0], [1.0, 2.0], [1.0, 1.0], [2.0, 1.0]];
-    //let b = array![[2.0, -1.0], [2.0, -2.0], [2.0, -2.0], [1.0, -3.0]];
-    let a = array![[1.0, 2.0], [1.0, 2.0], [1.0, 1.0], [2.0, 1.0]];
-    let b = array![[-1.0, 0.0], [-1.0, -0.0], [-1.0, -1.0], [0.0, -1.0]];
+    let a = array![[1.0, 0.0, 2.0], [0.0, 0.0, -2.0]];
+    let b = array![[2.0, 0.0, 1.0], [-2.0, 0.0, 0.0]];
+    let correct_r = array![
+        [-5.34384992e-17, 0.00000000e+00, 1.00000000e+00],
+        [0.00000000e+00, 1.00000000e+00, 0.00000000e+00],
+        [1.00000000e+00, 0.00000000e+00, -7.85941422e-17]
+    ];
 
-    for k in 0..4{
+    for i in 0..2 {
         let (rot, trans) = procrustes(&a, &b);
-        let p = a.slice(s![k, ..]);
-        let res = (-trans + (rot * p)) - b.slice(s![0, ..]);
-        assert_eq!(res.sum() < 0.01, true);
+        let p = a.slice(s![i, ..]);
+        let res: ArrayBase<OwnedRepr<f64>, Dim<[usize; 1]>> =
+            (-trans + (rot.dot(&p))) - b.slice(s![i, ..]);
+        assert_eq!(res.norm() < 0.001, true);
     }
+    let (rot, trans) = procrustes(&a, &b);
+    //assert_eq!((rot - correct_r).sum() < 0.001, true);
+    assert_eq!(is_rotation_matrix(&rot), true);
 }
 
 #[test]
@@ -223,19 +315,4 @@ fn load_json() {
         fs::read_to_string(ref_filename).expect("Something went wrong reading the file");
     let ref_pose = load_poses_from_json(&ref_contents).unwrap();
     assert_eq!(ref_pose[0].keypoints3d[0][0] != 0.0, true);
-}
-
-fn test_complete_w_reference() {
-    let a = vec![PersonPose {
-        id: 0,
-        keypoints3d: [[0.0; 4]; 25],
-    }];
-    let b = vec![PersonPose {
-        id: 0,
-        keypoints3d: [[0.0; 4]; 25],
-    }];
-    let mask: Vec<bool> = (0..25).map(|x| a[0].keypoints3d[x][3] != 0.0).collect();
-    let m_a = personpose_to_mat(&a[0], &mask);
-    let (rotation, translation) = procrustes(&m_a, &m_a);
-    //let completed = complete_with_transformed_ref(&a[0], &b[0], (&rotation, &translation));
 }
