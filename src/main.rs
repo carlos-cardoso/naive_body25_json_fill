@@ -82,28 +82,37 @@ fn mat_to_personpose(
 fn complete_with_transformed_ref(
     p: &PersonPose,
     ref_p: &PersonPose,
-    transformation: (
-        &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>,
-        &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 1]>>,
-    ),
 ) -> ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> {
-    let (rotation, translation) = transformation;
-    let rotation = rotation_matrix_z_component(rotation);
+    let mask: Vec<bool> = (0..25).map(|x| p.keypoints3d[x][3] != 0.0).collect();
+    let ref_mat = personpose_to_mat(&ref_p, &mask);
+    let mu_ref = ref_mat.mean_axis(Axis(0));
+    let ref_mat = ref_mat - mu_ref.as_ref().unwrap();
+    let a_mat = personpose_to_mat(&p, &mask);
+
+    //find rotation, translation
+    let (rotation, translation) = procrustes(&a_mat, &ref_mat);
+
+    let rotation = rotation_matrix_z_component(&rotation);
     let confidence = 0.7;
     let mut completed_keypoints = Array::zeros((25, 4));
+    let mask: Vec<bool> = (0..25).map(|_x| true).collect();
+    let complete_ref_mat = personpose_to_mat(&ref_p, &mask);
+    let _mu_complete_ref = complete_ref_mat.mean_axis(Axis(0));
+    let complete_ref_mat = complete_ref_mat - mu_ref.as_ref().unwrap();
+
     for i in 0..25 {
         //if p.keypoints3d[i][3] == 0.0{
         if p.keypoints3d[i][3] < 0.7 {
             let mut transformed_point = Array::zeros((1, 3));
             for j in 0..3 {
-                transformed_point[(0, j)] = ref_p.keypoints3d[i][j];
+                transformed_point[(0, j)] = complete_ref_mat[(i, j)]; //ref_p.keypoints3d[i][j];
             }
             //println!(": {:?}", check);
             //println!("det: {:?}", rotation.det());
             // * rotation) + translation;
             //transformed_point = transformed_point * rotation + translation;
             //transformed_point = rotation * transformed_point;
-            let res = (transformed_point.dot(&rotation)) + translation;
+            let res = (transformed_point.dot(&rotation)) + &translation;
             //println!("to: {:?}", res);
 
             //let res = ((-trans + (rot*p)) - b.slice(s![0, ..]));
@@ -186,19 +195,12 @@ fn main() {
     let mut v: Vec<PersonPose> = Vec::new();
     let mut count: u32 = 0;
     for ps in a {
-        let mask: Vec<bool> = (0..25).map(|x| ps.keypoints3d[x][3] != 0.0).collect();
-        let ref_mat = personpose_to_mat(&ref_pose[0], &mask);
-        let a_mat = personpose_to_mat(&ps, &mask);
-
-        //find rotation, translation
-        let (rotation, translation) = procrustes(&a_mat, &ref_mat);
-
         //println!("orig: {:?}", &a_mat);
         //println!("ref: {:?}", &ref_mat);
         //println!("rot: {:?}", &rotation);
         //println!("trans: {:?}", &translation);
         //apply rot/transl to ref and complete a
-        let completed = complete_with_transformed_ref(&ps, &ref_pose[0], (&rotation, &translation));
+        let completed = complete_with_transformed_ref(&ps, &ref_pose[0]);
         //println!("{:?}", completed);
 
         let p = mat_to_personpose(count, &completed);
@@ -214,12 +216,13 @@ fn main() {
 
 //https://learnopencv.com/rotation-matrix-to-euler-angles/
 // Checks if a matrix is a valid rotation matrix.
+#[cfg(test)]
 fn is_rotation_matrix(r: &ndarray::ArrayBase<OwnedRepr<f64>, ndarray::Dim<[usize; 2]>>) -> bool {
     println!("{:?}", r);
-    let iMat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
-    let check = iMat.dot(r).dot(&r.t());
-    let iMat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
-    (check - iMat).norm() < 0.000001
+    let i_mat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
+    let check = i_mat.dot(r).dot(&r.t());
+    let i_mat: ArrayBase<OwnedRepr<f64>, Dim<[usize; 2]>> = Array2::eye(3);
+    (check - i_mat).norm() < 0.000001
 }
 
 /*
@@ -262,16 +265,16 @@ fn rotation_matrix_z_component(
     let sy = (r[(0, 0)].powi(2) + r[(1, 0)].powi(2)).sqrt();
 
     let singular = sy < 1.0e-6_f64;
-    let mut x: f64 = 0.0;
-    let mut y: f64 = 0.0;
-    let mut z: f64 = 0.0;
-    if (!singular) {
-        x = r[(2, 1)].atan2(r[(2, 2)]);
-        y = (-r[(2, 0)]).atan2(sy);
+    //let mut x: f64;
+    //let mut y: f64;
+    let z: f64;
+    if !singular {
+        // x = r[(2, 1)].atan2(r[(2, 2)]);
+        // y = (-r[(2, 0)]).atan2(sy);
         z = r[(1, 0)].atan2(r[(0, 0)]);
     } else {
-        x = (-r[(1, 2)]).atan2(r[(1, 1)]);
-        y = (-r[(2, 0)]).atan2(sy);
+        // x = (-r[(1, 2)]).atan2(r[(1, 1)]);
+        // y = (-r[(2, 0)]).atan2(sy);
         z = 0.0;
     }
 
