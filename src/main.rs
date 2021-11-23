@@ -76,7 +76,7 @@ fn complete_with_transformed_ref(
     p: &PersonPose,
     ref_p: &PersonPose,
 ) -> Array<f64, Dim<[usize; 2]>> {
-    let mask: Vec<bool> = (0..25).map(|x| p.keypoints3d[x][3] != 0.0).collect();
+    let mask: Vec<bool> = (0..25).map(|x| p.keypoints3d[x][3] >= 0.8).collect();
     let ref_mat = personpose_to_mat(ref_p, &mask);
     let mu_ref = ref_mat.mean_axis(Axis(0));
     let ref_mat = ref_mat - mu_ref.as_ref().unwrap();

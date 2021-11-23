@@ -5,6 +5,8 @@ cargo build --release
 for filename in ./*.json
 do
     target/release/naive_body25_pose_fill "${filename}"
+    echo "${filename}"
+
 done
 
 cp out/*.json ../../mycompleted_data/output/keypoints3d
